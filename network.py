@@ -9,9 +9,9 @@ This code is supplied without any warranty. Any loss or dammage caused
 by this code is your problem.
 
 """
-boardunid=0
 
-import random,time
+import os.path
+import random,time,math
 from copy import *
 try:
     import Tkinter as tk
@@ -35,7 +35,7 @@ class Link:
         self.board=nodes[0].board
         self.unid=self.board.nodeunid
         self.board.nodeunid+=1
-        
+        self.open=True
         self.nodes=nodes
 
         for node in self.nodes:
@@ -46,15 +46,18 @@ class Link:
         if self.board.rendered:
             self.newObj()
         self.board.links.append(self)
-    def __delattr__(self, name):
-        raise BaseException("Deleting Attributes is not allowed")
-    
+
     def __hash__(self):
         """
         returns unid.
         Use like <<hash(link)>>
         """
         return self.unid
+    def __str__(self):
+        if self.open:
+            return "Link open uniqueID = "+str(self.unid)
+        else:
+            return "Link closed uniqueID = "+str(self.unid)
     def __iter__(self):
         """
         Allows looping on a list function.
@@ -109,7 +112,7 @@ class Link:
         Creates a new rendered image of an object on a preexisting board.
         """
 
-        self.renderedObj=self.board.canvas.create_line(self.nodes[0].shadow[0],self.nodes[0].shadow[1],self.nodes[1].shadow[0],self.nodes[1].shadow[1],  tags=("L"))
+        self.renderedObj=self.board.canvas.create_line(self.nodes[0].shadow[0],self.nodes[0].shadow[1],self.nodes[1].shadow[0],self.nodes[1].shadow[1],  tags=("L"),width=self.board.linkThickness)
 
     def reposition(self):
         """
@@ -118,31 +121,46 @@ class Link:
 
         self.board.canvas.coords(self.renderedObj,self.nodes[0].shadow[0],self.nodes[0].shadow[1],self.nodes[1].shadow[0],self.nodes[1].shadow[1])
 
-    def __del__(self):
+    def deleteLink(self):
         """
         Gets rid of a link.
         Removes all connections and references to link.
         <<foo=Link(nodes)><
-        del foo>>
+        foo.deleteLink()>>
         will create and then remove the link.
-        However
-        <<foo=Link(nodes)><
-        bar=foo><
-        del foo>>
-        will leave the link in place and under the name bar.
+        foo will end up as a blank link object and
+        will not affect the rest of the system
+        in any way and has no attributes. As soon as foo
+        is manually deleted or goes out of scope the
+        garbadge colection in python will remove it entirely.
+
         """
         if self.board.rendered:
             self.board.canvas.delete(self.renderedObj)
-        for node in self.nodes:
-            node.active=True
+        self.ActiveateNodes()
+        for node in self:
             node.links.remove(self)
         self.board.links.remove(self)
- 
-
+        self.__dict__={}
+    def setOpen(self,isOpen):
+        if self.open!=isOpen:
+            self.open=isOpen
+            self.ActiveateNodes()
+            if self.board.rendered:
+                self.reColour()
+    def reColour(self):
+        if self.open:
+            self.board.canvas.itemconfig(self.renderedObj,fill="black")
+        else:
+            self.board.canvas.itemconfig(self.renderedObj,fill="grey")
+    def ActiveateNodes(self):
+        
+        for node in self:
+                node.active=True
 class Node(object):
 
     """
-    Basic node object
+    Basic node object. 
 
     """
 
@@ -169,7 +187,6 @@ class Node(object):
         self.board=board
         self.state=state
         self.newState=None
-        self.nextState=state
         self.location=location
         self.fixed=fixed
         self.active=True
@@ -184,26 +201,45 @@ class Node(object):
 
         for node in links:
             Link((self,node))
-
-            node.active=True
             
-
         board.nodes.append(self)
         assert state<self.board.noStates,"node set to state out of range"
  
         assert self.state!=None
-    def __del__(self):
-        self.ActiveateNeighbours()
-        self.board.canvas.delete(self.renderedObj)
+        if self.board.interactive:
+            self.bindNextState()
+    def __str__(self):
+        return "Node state = "+str(self.state)+" location"
+    def bindNextState(self):
+        self.board.canvas.tag_bind(self.renderedObj, '<ButtonPress-1>', self.nextState)
+
+    def deleteNode(self):
+        """
+        Gets rid of a node.
+        Removes all connections and references to the node.
+        <<foo=Node(args)><
+        foo.deleteNode()>>
+        will create and then remove the node.
+        foo will end up as a blank node object and
+        will not affect the rest of the system
+        in any way and has no attributes. As soon as foo
+        is manually deleted or goes out of scope the
+        garbadge colection in python will remove it entirely.
+
+        """
+        if self.board.rendered:
+            self.board.canvas.delete(self.renderedObj)
+
         for link in self.links:
-            del link
+            link.deleteLink()
         self.board.nodes.remove(self)
-        del self
+        self.__dict__={}
 
     def __iter__(self):
         
         for link in self.links:
-            yield link.getOtherNode(self)
+            if link.open:
+                yield link.getOtherNode(self)
     def __contains__(self, value):
         if value in self.links:
             return True
@@ -234,30 +270,34 @@ class Node(object):
         Use like <<hash(node)>>
         """
         return self.unid
-    def nextState(self):
-        setState((self.state+1)%self.board.noStates)
+    def nextState(self,event):
+        self.setState((self.state+1)%self.board.noStates)
     def newObj(self):
 
         self.findShadow()
-        nodesize=10
-        self.renderedObj=self.board.canvas.create_oval(self.shadow[0]-nodesize,self.shadow[1]-nodesize,self.shadow[0]+nodesize,self.shadow[1]+nodesize,fill=self.board.colours[self.state],tags=("N"))
+        nodeSize=self.board.nodeSize
+        self.renderedObj=self.board.canvas.create_oval(self.shadow[0]-nodeSize,self.shadow[1]-nodeSize,self.shadow[0]+nodeSize,self.shadow[1]+nodeSize,fill=self.board.colours[self.state],tags=("N"))
     def findShadow(self):
         self.shadow=self.board.translate[:]
+        assert self.shadow!=None
+        assert self.location!=None
         for ind,pair in enumerate(self.board.mapping):
             for index,scaleFac in enumerate(pair):
                 self.shadow[index]+=self.location[ind]*scaleFac
 
-    def rePosition(self):
+    def reposition(self):
         self.findShadow()
-        nodesize=10
-        self.board.canvas.coords(self.renderedObj,self.shadow[0]-nodesize,self.shadow[1]-nodesize,self.shadow[0]+nodesize,self.shadow[1]+nodesize)
-        for link in self:
-            link.rePosition()
+        nodeSize=self.board.nodeSize
+        self.board.canvas.coords(self.renderedObj,self.shadow[0]-nodeSize,self.shadow[1]-nodeSize,self.shadow[0]+nodeSize,self.shadow[1]+nodeSize)
+        for link in self.links:
+            link.reposition()
     def reColour(self):
         assert self.state!=None
+        
         self.board.canvas.itemconfig(self.renderedObj,fill=self.board.colours[self.state])
     def setState(self,state):
         assert state<self.board.noStates,"node set to state out of range"
+
         if state==self.state:
             return
         if state==None:
@@ -267,6 +307,7 @@ class Node(object):
 
         self.state=state
         self.ActiveateNeighbours()
+        assert self.board.rendered
         if self.board.rendered:
             self.reColour()
     def ActiveateNeighbours(self):
@@ -340,10 +381,9 @@ class Rule:
         assert len(MinMax)<=2,"Each condition must contain exactly one \":\". Please use getHelp() for help."
 
         states=statesMod[0].split(",")
-        statesAsInt=set()
-        for state in states:
-            statesAsInt.add(intOrNone(state,True))
-        Condition(self,statesAsInt,intOrNone(statesMod[1],False),intOrNone(MinMax[0],False),intOrNone(MinMax[1],False))
+        states=[intOrNone(i) for i in states]
+
+        Condition(self,states,intOrNone(statesMod[1],False),intOrNone(MinMax[0],False),intOrNone(MinMax[1],False))
         
     def test(self, stateCount,oldState):
         if oldState not in self.oldStates:
@@ -361,11 +401,11 @@ class Board:
     Contains all action
     """
     #def __init__( self , oldStates:list , conditions:list , output:int ):
-    
-    def reset(self,dimensions=2,rendered=False):
-        global boardunid
-        self.unid=boardunid
-        boardunid+=1
+    boardunid=0
+    def reset(self,dimensions=2,rendered=False,rotateWithMouse=False,interactive=False,nodeSize=10,linkThickness=1,mapping=[[18,0,0],[0,18,0]],translate=[20,20,0],stateCycle=None,resetFunc=0):
+
+        self.unid=Board.boardunid
+        Board.boardunid+=1
         self.nodes=[]
         self.links=[]
         self.dimensions=dimensions
@@ -376,36 +416,46 @@ class Board:
         self.largestNodeState=0
         self.windowSize=None
         self.colours=["black","red","orange","yellow","green","blue","purple","white"]
-
         self.rules=[]
         self.rulestring="1,4@1-1:3,2-3:#2."
         self.dimensions=dimensions
         self.master=None
         self.canvas=None
-
+        self.interactive=interactive
         self.rendered=rendered
-        self.mapping=[[30,0,0],[0,30,0]]
-        self.translate=[30,60,0]
+        self.mapping=mapping
+        self.translate=translate
+        self.resetFunc=resetFunc
+        
+        self.nodeSize=nodeSize
+        self.linkThickness=linkThickness
+    def __init__(self,dimensions=2,rendered=False ,canvasXWidth=600,canvasYWidth=600,title="Network Graphic",rotateWithMouse=False,interactive=False,nodeSize=10,linkThickness=1,mapping=[[18,0,0],[0,18,0]],translate=[20,20,0],stateCycle=None,resetFunc=0):
 
-
-    def __init__(self,dimensions=2,rendered=False ,canvasXWidth=600,canvasYWidth=600,title="Network Graphic",interactive=True):
-
-        self.reset(dimensions,rendered)
+        self.reset(dimensions=dimensions,rendered=rendered,rotateWithMouse=rotateWithMouse,interactive=interactive,nodeSize=nodeSize,linkThickness=linkThickness,mapping=mapping,translate=translate,stateCycle=stateCycle,resetFunc=resetFunc)
         if self.rendered:
-            self.setupCanvas()
+            self.setupCanvas(canvasXWidth,canvasYWidth,title,rotateWithMouse,interactive)
 
 
 
-    def setupCanvas(self,canvasXWidth=600,canvasYWidth=600,title="Network Graphic",interactive=True):
+    def setupCanvas(self,canvasXWidth=600,canvasYWidth=600,title="Network Graphic",rotateWithMouse=False,interactive=False):
 
         self.rendered=True
         self.windowSize=(canvasXWidth,canvasYWidth)
         self.master = tk.Tk()
+#        self.master.overrideredirect(True)
+#        self.master.geometry("{0}x{1}+0+0".format(self.master.winfo_screenwidth(), self.master.winfo_screenheight()))
         self.master.title(title)
+        if interactive:
+            self.buttonFrame=tk.Frame(self.master, height=100)
+            self.applyRulesButton=tk.Button(self.buttonFrame, width=12, height=2,text="Apply Rules" ,command=self.boundApplyRules).pack(side=tk.LEFT)
+            self.repeatRulesButton=tk.Button(self.buttonFrame, width=12, height=2,text="Repeat Rules",command=self.boundGoOrStop).pack(side=tk.LEFT)
+            self.resetButton=tk.Button(self.buttonFrame, width=12, height=2,text="Reset",command=self.boundReset).pack(side=tk.LEFT)
+            self.buttonFrame.pack()
+            self.paused=True
 
         self.canvas= tk.Canvas(self.master, width=canvasXWidth, height=canvasYWidth)
 
-        if interactive:
+        if rotateWithMouse:
             self.canvas.bind("<Button-1>", self.changeView)
 
         self.canvas.pack()
@@ -414,37 +464,65 @@ class Board:
         for link in self.links:
             link.newObj()
         self.refresh()
+    def boundGoOrStop(self,event=None):
+        self.paused=not self.paused
+        if not self.paused:
+            self.boundRepeatRules()
+    def boundApplyRules(self,event=None):
+        self.applyRules()
+    def boundRepeatRules(self, event=None):
 
+        if self.paused:
+            return
+        if self.applyRules()==0:
+            self.paused=True
+            return
+
+
+
+        self.master.after(100, self.boundRepeatRules)                  
+
+    def boundReset(self,event=None):
+        self.paused=True
+        if type(self.resetFunc)==int:
+            self.nodesToState(self.resetFunc)
+        else:
+            self.randomizeStates(self.resetFunc)
     def refresh(self):
 
-
-
-
-        self.canvas.lift("N")
-
         self.master.update()
-    def newRulesFromString(self,rulesStr):
+
+    def nodesToFront(self):
+        self.nodes.sort(key=lambda i:i.shadow[2])
+        for node in self.nodes:
+            self.canvas.lift(node.renderedObj)
+
+
+    def newRulesFromString(self,rulesStr,stateCycle=None):
         rulesStr=rulesStr.split(".")
         self.noStates=int(rulesStr.pop())
         for ruleStr in rulesStr:
             self.newRuleFromString(ruleStr)
+        if stateCycle==None:
+            stateCycle=list(range(1,self.noStates))
+            stateCycle.append(0)
+        self.stateCycle=stateCycle
     def newRuleFromString(self,ruleStr):
         intOrNone=self.intOrNone
         assert ruleStr!="","Two consecutive fullstops were found in the rule string. This is not valid syntax. Please use getHelp() for help."
         oldStates,ruleStr=ruleStr.split("@")
         oldStates=oldStates.split(",")
-        oldStateInt=[]
-        for oldStatevalue in oldStates:
-            oldStateInt.append(intOrNone(oldStatevalue))
-
+        oldStates=[int(i) for i in oldStates]
+        
         conditions,output=ruleStr.split("#")
-        rule=Rule(self,oldStateInt,[],intOrNone(output))
+        rule=Rule(self,oldStates,[],intOrNone(output))
 
         conditions=conditions.split(";")
         for condition in conditions:
             rule.conditionFromString(condition)
     def newRuleFromFile(self,ruleName):
-        with open("networkRules.txt" ,mode='r' )as rules:
+        full_path = os.path.realpath(__file__)
+        with open(os.path.dirname(full_path)+"/networkRules.txt" ,mode='r' )as rules:
             lines=rules.read().splitlines()
         names=lines[::2]
         pos=names.index(ruleName.lower())
@@ -459,13 +537,15 @@ class Board:
                 continue
             node.active=False
             stateCount=[0]*self.noStates
-            for link in node.links:
-                stateCount[link.getOtherNode(node).state]+=1
+            for neighbours in node:
+
+                stateCount[neighbours.state]+=1
             for rule in self.rules:
                 result=rule.test(stateCount,node.state)
                 if result !=None:
                     node.newState=result
                     break
+                
         for node in self.nodes:
             if node.newState ==None:
                 continue
@@ -475,8 +555,10 @@ class Board:
             node.setState(node.newState)
             node.newState=None
         if self.rendered:
+            
             self.refresh()
         return updatedCount
+        
     def deleteRandomLinks(self,probability=0.5):
         for link in self.links:
             if random.random()<probability:
@@ -539,30 +621,38 @@ class Board:
 
                     doLoop=True
                     break
+        if self.rendered:
+            self.nodesToFront()
 
+    def distanceConnectedNode(self,state,location,minDist,connectDist,minConnects=0):
 
-    def distanceConnectedNode(self,state,location,minDist,connectDist,minConnects=None):
         connectToNodes=[]
         minDistSq=minDist**2
         connectDistSq=connectDist**2
-        for nodePos,node in enumerate(self.nodes):
+        for node in self.nodes:
             totalDist=0
             for dimention,position in enumerate(node.location):
                 totalDist+=(position-location[dimention])**2
             if totalDist<minDistSq:
                 return False
             elif totalDist<connectDist:
-                connectToNodes.append(nodePos)
-        if minConnects!=None:
-            if len(connectToNodes)<minConnects:
-                return False
+                connectToNodes.append(node)
 
-        Node(self,connectToNodes,state,location)
+        if len(connectToNodes)<minConnects:
+            return False
+
+        Node(self,connectToNodes,state,location=location)
         return True
 
-
-
-
+    def randomConnectedNodes(self,state,maxLocation,minDist,connectDist,repeat=1,minConnects=0):
+        for count in range(repeat):
+            location=[0]*len(maxLocation)
+            for pos,loc in enumerate(maxLocation):
+                location[pos]=random.uniform(0,loc)
+            self.distanceConnectedNode(state,location,minDist,connectDist,minConnects)
+        if self.rendered:
+            self.nodesToFront()
+        
     def randomizeStates(self,relitivePropabilities):
 
         total=0
@@ -634,6 +724,9 @@ class Board:
                 node.goal=goal
 
 
+    def nodesToState(self,state):
+        for node in self.nodes:
+            node.setState(state)
 
     def updateTillNodesInGoal(self, allNodes, checkVal=1000,pause=None):
         count=0
@@ -653,15 +746,46 @@ class Board:
                     return True
 
             count+=1
-            
-    def fullDataRun(self,setTo,allNodes, checkVal=1000,pause=None):
+    def countSteps(self,  checkVal=1000,pause=None):
+        percT=0
+        nperced=True
+        for count in range(1,checkVal):
+            if pause!=None:
+                time.sleep(pause)
+
+            if nperced:
+                goalMet=self.nodesInGoal()
+
+                if goalMet[0]!=0 :
+                    nperced=False
+                    percT=count
+            if self.applyRules()==0:
+                return (percT,count)
+        raise BaseException
+    def fullNodeDataRun(self,setTo,allNodes, checkVal=1000,pause=None):
         order=copy(self.nodes)
         random.shuffle(order)
         for count,node in enumerate(order):
             if self.updateTillNodesInGoal(allNodes, checkVal,pause):
                 return count
             node.setState(setTo)
+        return len(self.nodes)+1
+    def fullLinkDataRun(self,setTo,allNodes, checkVal=1000,pause=None):
+        for link in self.links:
+            link.setOpen(False)
+        order=copy(self.links)
+        random.shuffle(order)
+        for count,link in enumerate(order):
+            if self.updateTillNodesInGoal(allNodes, checkVal,pause):
+                return count
+            link.setOpen(True)
 
+    def changeView(self,event):
+        xRot=(event.x-300.)/250.
+        yRot=(event.y-300.)/250.
+        scaleF=40
+        self.canvas.coords(self.nodes[95].renderedObj,0,0,10,10)
+        self.mapping=[[math.cos(xRot)*scaleF,0,0],[0,math.cos(xRot)*scaleF,0],[math.sin(xRot)*scaleF,math.sin(yRot)*scaleF,0]]
+        for node in self.nodes:
+            node.reposition()
 
-    def changeView(self,hc):
-        pass
