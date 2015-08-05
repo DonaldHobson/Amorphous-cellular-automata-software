@@ -1,3 +1,4 @@
+
 import network as nw
 
 main=nw.Board(dimensions=2,rendered=True,interactive=True,canvasXWidth=500,canvasYWidth=500,nodeSize=10,linkThickness=3,mapping=[[0,20,0],[20,0,0]],resetFunc=[3,0,2])
